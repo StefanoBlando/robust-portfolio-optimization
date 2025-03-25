@@ -29,7 +29,6 @@ This research introduces novel robust estimation methods for portfolio optimizat
 
 ### Prerequisites
 - R 4.1.0 or higher
-- Python 3.8 or higher
 - Required packages listed in `requirements.txt`
 
 ### Setup
@@ -41,5 +40,4 @@ cd robust-portfolio-optimization
 # Install R dependencies
 Rscript -e "install.packages(c('quadprog', 'robustbase', 'rrcov', 'tidyverse', 'shiny'))"
 
-# Install Python dependencies
-pip install -r requirements.txt
+

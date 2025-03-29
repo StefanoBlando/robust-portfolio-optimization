@@ -1,6 +1,6 @@
 # Robust Portfolio Optimization
 
-This repository contains the code used in the thesis "Robust Portfolio Optimization with Applications to Financial Data." The project implements and analyzes various robust covariance estimation methods for portfolio optimization under different market conditions, including stressed environments.
+This repository contains the code used in the thesis "High-Dimensional Robust Portfolio Optimization Under Sparse Contamination: A Factor-Analytic Approach." The project implements and analyzes various robust covariance estimation methods for portfolio optimization under different market conditions, including stressed environments.
 
 ## Overview
 

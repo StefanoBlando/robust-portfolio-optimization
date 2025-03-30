@@ -8,9 +8,9 @@ Modern portfolio theory relies on accurate covariance estimation to construct op
 
 The repository implements several key methodological innovations:
 
-- **Hybrid Factor-Based Robust Estimator (HFBRE)**: A novel approach combining robust factor dimension selection with targeted robustification in the factor space, achieving superior computational efficiency while maintaining statistical robustness
-- **Hybrid MCD-ROBPCA**: A multi-stage approach with preliminary outlier detection followed by robust factor analysis
-- **Hybrid robust methods**: Various combinations of dimension reduction and robust estimation techniques
+- **Parallel Factor Space Estimator (PFSE)**: A novel approach combining robust factor dimension selection with targeted robustification in the factor space, achieving superior computational efficiency while maintaining statistical robustness
+- **Sequential Screening Robust Estimator (SSRE)**: A multi-stage approach with preliminary outlier detection followed by robust factor analysis
+- **SSRE with Graphical Lasso (SSRE_GLasso)**: Enhanced estimation with graphical lasso regularization for better conditioning
 
 These are compared against traditional methods including:
 
@@ -48,9 +48,9 @@ robust-portfolio-optimization/
 
 ### 1. Novel Robust Estimation Methods
 
-- **HFBRE (Hybrid Factor-Based Robust Estimator)**: Combines robust factor dimension selection via parallel analysis with targeted robustification in the factor space, achieving superior computational efficiency while maintaining statistical robustness
-- **Hybrid MCD-ROBPCA**: Implements a multi-stage approach with preliminary outlier detection, robust dimension reduction, and structured residual handling
-- **Hybrid MCD-ROBPCA-GLasso**: Enhances estimation with graphical lasso regularization for better conditioning
+- **PFSE (Parallel Factor Space Estimator)**: Combines robust factor dimension selection via parallel analysis with targeted robustification in the factor space, achieving superior computational efficiency while maintaining statistical robustness
+- **SSRE (Sequential Screening Robust Estimator)**: Implements a multi-stage approach with preliminary outlier detection, robust dimension reduction, and structured residual handling
+- **SSRE_GLasso**: Enhances estimation with graphical lasso regularization for better conditioning
 
 ### 2. Comprehensive Analysis Framework
 
@@ -130,13 +130,13 @@ This executes the multi-scenario stress testing framework to evaluate method res
 
 The repository implements the methods that achieved the following results in our research:
 
-1. **Performance Improvement**: Hybrid robust methods achieve approximately 15-20% higher Sharpe ratios than conventional approaches while requiring only 10-15% of the computational resources of traditional robust estimators
+1. **Performance Improvement**: Robust methods (PFSE, SSRE) achieve approximately 15-20% higher Sharpe ratios than conventional approaches while requiring only 10-15% of the computational resources of traditional robust estimators
 
 2. **Weight Stability**: Robust methods reduce portfolio turnover by 30-40% compared to conventional approaches, substantially lowering transaction costs
 
 3. **Stress Resilience**: Under stress conditions, hybrid methods maintain over 90% of their performance while conventional methods deteriorate by 30-50%
 
-4. **Computational Efficiency**: Hybrid methods achieve robust estimation with computation times reduced by 80-90% compared to traditional robust approaches
+4. **Computational Efficiency**: PFSE and SSRE achieve robust estimation with computation times reduced by 80-90% compared to traditional robust approaches
 
 ## Usage Examples
 
@@ -151,8 +151,8 @@ source("src/utils.R")
 # Generate or load data
 returns <- read.csv("your_returns_data.csv")
 
-# Apply HFBRE estimation
-cov_matrix <- hybrid_factor_robust_cov(returns, k = 5, threshold = 3.0)
+# Apply PFSE estimation
+cov_matrix <- pfse(returns, k = 5, threshold = 3.0)
 
 # Construct minimum variance portfolio
 weights <- min_var_portfolio(returns, cov_matrix)
@@ -191,8 +191,6 @@ We welcome contributions to this project. Please feel free to submit a pull requ
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-
 
 ## Acknowledgments
 

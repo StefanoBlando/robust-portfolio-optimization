@@ -1,0 +1,516 @@
+# ========================================================================
+# Utility Functions
+# ========================================================================
+
+# Improved outlier detection with robust analysis
+detect_outliers <- function(returns_matrix, method = "MAD", threshold = 3) {
+  n <- nrow(returns_matrix)
+  p <- ncol(returns_matrix)
+  
+  cat("Using", method, "method with threshold:", threshold, "for outlier detection\n")
+  
+  # Initialize outlier mask (1 = clean, 0 = contaminated)
+  outlier_mask <- matrix(1, nrow = n, ncol = p)
+  
+  if(method == "MAD") {
+    # Modified Z-score (MAD-based) method - more robust to extreme outliers
+    for(j in 1:p) {
+      col_data <- returns_matrix[, j]
+      med_val <- median(col_data, na.rm = TRUE)
+      mad_val <- mad(col_data, na.rm = TRUE)
+      
+      # Handle zero MAD with proper fallback
+      if(mad_val <= 0) {
+        # Use Rousseeuw & Croux's Sn estimator or fall back to SD/1.4826
+        sn_val <- tryCatch({
+          robustbase::Sn(col_data)
+        }, error = function(e) {
+          sd(col_data, na.rm = TRUE) / 1.4826
+        })
+        
+        mad_val <- max(sn_val, 1e-8)  # Ensure non-zero value
+      }
+      
+      # Calculate Modified Z-scores
+      z_scores <- abs(col_data - med_val) / mad_val
+      
+      # Flag outliers using specified threshold
+      outliers <- z_scores > threshold
+      outlier_mask[outliers, j] <- 0
+    }
+  } else if(method == "IQR") {
+    # Interquartile Range method - good for heavy-tailed distributions
+    for(j in 1:p) {
+      col_data <- returns_matrix[, j]
+      q1 <- quantile(col_data, 0.25, na.rm = TRUE)
+      q3 <- quantile(col_data, 0.75, na.rm = TRUE)
+      iqr <- q3 - q1
+      
+      # Handle zero IQR with proper fallback
+      if(iqr <= 0) {
+        # Calculate a robust scale using percentile-based approach
+        p10 <- quantile(col_data, 0.10, na.rm = TRUE)
+        p90 <- quantile(col_data, 0.90, na.rm = TRUE)
+        alt_scale <- (p90 - p10) / 2.56  # Normalized to match normal distribution
+        
+        iqr <- max(alt_scale, sd(col_data, na.rm = TRUE) / 1.349)  # IQR ≈ 1.349 × SD for normal data
+        iqr <- max(iqr, 1e-8)  # Ensure non-zero value
+      }
+      
+      # Set bounds with specified threshold
+      lower_bound <- q1 - threshold * iqr
+      upper_bound <- q3 + threshold * iqr
+      
+      # Flag outliers
+      outliers <- col_data < lower_bound | col_data > upper_bound
+      outlier_mask[outliers, j] <- 0
+    }
+  } else if(method == "MCD") {
+    # Multivariate outlier detection with MCD
+    tryCatch({
+      # Check if we have enough observations for stable MCD
+      if(n > p * 2) {
+        # Use appropriate alpha for data dimensions
+        alpha_val <- min(0.875, max(0.5, 0.75 + 0.125 * (p/n)))
+        
+        # Run MCD with deterministic algorithm for reproducibility
+        mcd_result <- rrcov::CovMcd(returns_matrix, alpha = alpha_val, nsamp = "deterministic")
+        
+        # Calculate robust Mahalanobis distances
+        rob_dists <- mahalanobis(returns_matrix, 
+                                 center = mcd_result@center, 
+                                 cov = mcd_result@cov)
+        
+        # Chi-square cutoff for p degrees of freedom (97.5% quantile)
+        chi2_cutoff <- qchisq(0.975, df = p)
+        mv_outliers <- rob_dists > chi2_cutoff
+        
+        # For multivariate outliers, mark all dimensions
+        for(i in which(mv_outliers)) {
+          outlier_mask[i, ] <- 0
+        }
+      } else {
+        # If insufficient data for reliable MCD, fall back to columnwise MAD
+        cat("Not enough observations for reliable MCD (need n > 2p), using columnwise detection\n")
+        for(j in 1:p) {
+          col_data <- returns_matrix[, j]
+          med_val <- median(col_data, na.rm = TRUE)
+          mad_val <- mad(col_data, na.rm = TRUE)
+          
+          if(mad_val <= 0) mad_val <- sd(col_data, na.rm = TRUE) / 1.4826
+          if(mad_val <= 0) mad_val <- 1e-8
+          
+          z_scores <- abs(col_data - med_val) / mad_val
+          outliers <- z_scores > threshold
+          outlier_mask[outliers, j] <- 0
+        }
+      }
+    }, error = function(e) {
+      # Fall back to columnwise MAD if MCD fails
+      warning("MCD outlier detection failed:", e$message, "\nUsing columnwise MAD instead")
+      for(j in 1:p) {
+        col_data <- returns_matrix[, j]
+        med_val <- median(col_data, na.rm = TRUE)
+        mad_val <- mad(col_data, na.rm = TRUE)
+        
+        if(mad_val <= 0) mad_val <- sd(col_data, na.rm = TRUE) / 1.4826
+        if(mad_val <= 0) mad_val <- 1e-8
+        
+        z_scores <- abs(col_data - med_val) / mad_val
+        outliers <- z_scores > threshold
+        outlier_mask[outliers, j] <- 0
+      }
+    })
+  }
+  
+  # Calculate contamination percentage
+  contamination_pct <- 100 * (1 - sum(outlier_mask) / (n * p))
+  cat("Detected contamination level:", round(contamination_pct, 2), "%\n")
+  
+  # Warn if contamination level is suspiciously high
+  if(contamination_pct > 20) {
+    warning("Unusually high contamination level detected (", round(contamination_pct, 2), 
+            "%). Consider adjusting threshold or inspecting data quality.")
+  }
+  
+  return(list(
+    outlier_mask = outlier_mask,
+    contamination_pct = contamination_pct,
+    outlier_counts_by_asset = colSums(outlier_mask == 0),
+    outlier_counts_by_time = rowSums(outlier_mask == 0),
+    threshold = threshold
+  ))
+}
+
+# Winsorize data instead of removing outliers
+winsorize_returns <- function(returns_matrix, outlier_mask, method = "shrinkage") {
+  # Create a copy to avoid modifying the original
+  winsorized_returns <- returns_matrix
+  
+  n <- nrow(returns_matrix)
+  p <- ncol(returns_matrix)
+  
+  if(method == "median") {
+    # Replace outliers with column medians
+    for(j in 1:p) {
+      outlier_idx <- which(outlier_mask[, j] == 0)
+      if(length(outlier_idx) > 0) {
+        # Calculate median from clean data only
+        clean_data <- returns_matrix[outlier_mask[, j] == 1, j]
+        if(length(clean_data) > 0) {
+          med_val <- median(clean_data, na.rm = TRUE)
+        } else {
+          # If no clean data, use overall median
+          med_val <- median(returns_matrix[, j], na.rm = TRUE)
+        }
+        winsorized_returns[outlier_idx, j] <- med_val
+      }
+    }
+  } else if(method == "quantile") {
+    # Replace outliers with winsorized values (capped at quantiles)
+    for(j in 1:p) {
+      # Calculate quantiles from clean data
+      clean_data <- returns_matrix[outlier_mask[, j] == 1, j]
+      
+      if(length(clean_data) > 5) {
+        q_low <- quantile(clean_data, 0.05, na.rm = TRUE)
+        q_high <- quantile(clean_data, 0.95, na.rm = TRUE)
+      } else {
+        # Fall back to all data if not enough clean observations
+        q_low <- quantile(returns_matrix[, j], 0.05, na.rm = TRUE)
+        q_high <- quantile(returns_matrix[, j], 0.95, na.rm = TRUE)
+      }
+      
+      outlier_idx <- which(outlier_mask[, j] == 0)
+      if(length(outlier_idx) > 0) {
+        for(i in outlier_idx) {
+          if(returns_matrix[i, j] < q_low) {
+            winsorized_returns[i, j] <- q_low
+          } else if(returns_matrix[i, j] > q_high) {
+            winsorized_returns[i, j] <- q_high
+          }
+        }
+      }
+    }
+  } else if(method == "shrinkage") {
+    # Shrink outliers toward the median proportionally to their extremity
+    for(j in 1:p) {
+      # Calculate robust center and scale from clean data
+      clean_data <- returns_matrix[outlier_mask[, j] == 1, j]
+      
+      if(length(clean_data) > 5) {
+        med_val <- median(clean_data, na.rm = TRUE)
+        mad_val <- mad(clean_data, na.rm = TRUE)
+      } else {
+        # Fall back to all data if not enough clean observations
+        med_val <- median(returns_matrix[, j], na.rm = TRUE)
+        mad_val <- mad(returns_matrix[, j], na.rm = TRUE)
+      }
+      
+      # Handle zero MAD
+      if(mad_val <= 0) mad_val <- sd(returns_matrix[, j], na.rm = TRUE) / 1.4826
+      if(mad_val <= 0) mad_val <- 1e-8
+      
+      outlier_idx <- which(outlier_mask[, j] == 0)
+      if(length(outlier_idx) > 0) {
+        for(i in outlier_idx) {
+          # Calculate z-score
+          z_score <- (returns_matrix[i, j] - med_val) / mad_val
+          
+          # Shrinkage factor: more extreme values get shrunk more
+          # Use a sigmoid function to ensure shrinkage is bounded
+          shrink_factor <- 2 / (1 + exp(-abs(z_score)/5)) - 1
+          shrink_factor <- min(0.9, shrink_factor)  # Cap at 90% shrinkage
+          
+          # Apply shrinkage toward median
+          winsorized_returns[i, j] <- returns_matrix[i, j] * (1 - shrink_factor) + med_val * shrink_factor
+        }
+      }
+    }
+  }
+  
+  return(winsorized_returns)
+}
+
+# Helper function to capitalize first letter (for visualizations)
+capitalize <- function(x) {
+  paste0(toupper(substr(x, 1, 1)), substr(x, 2, nchar(x)))
+}
+
+# Define market regimes based on date ranges
+identify_market_regimes <- function(dates, custom_regimes = NULL) {
+  # Convert dates to Date objects if they aren't already
+  if (!inherits(dates, "Date")) {
+    dates <- as.Date(dates)
+  }
+  
+  # If custom regimes are provided, use them
+  if (!is.null(custom_regimes)) {
+    return(assign_regimes(dates, custom_regimes))
+  }
+  
+  # Define standard market periods
+  regime_dates <- list(
+    bull_market = list(
+      start_date = as.Date("2016-01-01"),
+      end_date = as.Date("2019-12-31")
+    ),
+    covid_crash = list(
+      start_date = as.Date("2020-01-01"),
+      end_date = as.Date("2020-06-30")
+    ),
+    recovery = list(
+      start_date = as.Date("2020-07-01"),
+      end_date = as.Date("2021-12-31")
+    ),
+    recent = list(
+      start_date = as.Date("2022-01-01"),
+      end_date = Sys.Date() + 365  # Include future dates to cover entire range
+    )
+  )
+  
+  # Assign regimes based on date ranges
+  return(assign_regimes(dates, regime_dates))
+}
+
+# Helper function to assign regimes based on date ranges
+assign_regimes <- function(dates, regime_dates) {
+  # Create regime labels for each observation
+  regimes <- rep(NA, length(dates))
+  
+  for (regime_name in names(regime_dates)) {
+    regime_info <- regime_dates[[regime_name]]
+    # Find indices within this regime
+    regime_idx <- which(dates >= regime_info$start_date & 
+                          dates <= regime_info$end_date)
+    regimes[regime_idx] <- regime_name
+  }
+  
+  # Handle any unassigned dates (assign to nearest regime)
+  if (any(is.na(regimes))) {
+    for (i in which(is.na(regimes))) {
+      cur_date <- dates[i]
+      # Find closest regime boundary
+      min_dist <- Inf
+      closest_regime <- NULL
+      
+      for (regime_name in names(regime_dates)) {
+        regime_info <- regime_dates[[regime_name]]
+        dist_start <- abs(as.numeric(cur_date - regime_info$start_date))
+        dist_end <- abs(as.numeric(cur_date - regime_info$end_date))
+        min_dist_regime <- min(dist_start, dist_end)
+        
+        if (min_dist_regime < min_dist) {
+          min_dist <- min_dist_regime
+          closest_regime <- regime_name
+        }
+      }
+      
+      regimes[i] <- closest_regime
+    }
+  }
+  
+  return(regimes)
+}
+
+# Split train-test with regime awareness
+split_train_test_by_regime <- function(returns_matrix, dates, market_returns = NULL, 
+                                       train_ratio = 0.7, regimes = NULL) {
+  n <- nrow(returns_matrix)
+  
+  # Identify regimes if not provided
+  if (is.null(regimes)) {
+    regimes <- identify_market_regimes(dates)
+  }
+  
+  # Initialize empty containers for train/test sets
+  train_indices <- integer(0)
+  test_indices <- integer(0)
+  
+  # Get unique regimes
+  unique_regimes <- unique(regimes)
+  
+  cat("Performing train-test split within each of", length(unique_regimes), "market regimes\n")
+  
+  # For each regime, split data independently
+  for (regime in unique_regimes) {
+    regime_indices <- which(regimes == regime)
+    n_regime <- length(regime_indices)
+    
+    if (n_regime > 10) {  # Only split if we have enough data in this regime
+      # Calculate train size for this regime
+      train_size_regime <- floor(n_regime * train_ratio)
+      
+      # Split chronologically within regime
+      train_indices_regime <- regime_indices[1:train_size_regime]
+      test_indices_regime <- regime_indices[(train_size_regime+1):n_regime]
+      
+      # Add to overall indices
+      train_indices <- c(train_indices, train_indices_regime)
+      test_indices <- c(test_indices, test_indices_regime)
+      
+      cat("- Regime '", regime, "': ", length(train_indices_regime), 
+          " train, ", length(test_indices_regime), " test observations\n", sep="")
+    } else {
+      warning("Regime '", regime, "' has only ", n_regime, 
+              " observations, insufficient for splitting. Using all for training.")
+      # If too few observations, use all for training
+      train_indices <- c(train_indices, regime_indices)
+    }
+  }
+  
+  # Sort indices to maintain temporal order within each regime
+  train_indices <- sort(train_indices)
+  test_indices <- sort(test_indices)
+  
+  # Create train/test sets
+  train_returns <- returns_matrix[train_indices, , drop = FALSE]
+  test_returns <- returns_matrix[test_indices, , drop = FALSE]
+  
+  train_dates <- dates[train_indices]
+  test_dates <- dates[test_indices]
+  
+  # Split market returns if provided
+  if (!is.null(market_returns)) {
+    train_market <- market_returns[train_indices]
+    test_market <- market_returns[test_indices]
+  } else {
+    train_market <- test_market <- NULL
+  }
+  
+  # Validate that splits have sufficient data
+  if (nrow(train_returns) < 50) {
+    warning("Training set has limited data: only ", nrow(train_returns), 
+            " observations. Consider using a larger dataset or adjusting regime boundaries.")
+  }
+  
+  if (nrow(test_returns) < 20) {
+    warning("Test set has limited data: only ", nrow(test_returns), 
+            " observations. Consider using a larger dataset or adjusting regime boundaries.")
+  }
+  
+  # Return train/test splits and regime information
+  return(list(
+    train_returns = train_returns,
+    test_returns = test_returns,
+    train_dates = train_dates,
+    test_dates = test_dates,
+    train_market = train_market,
+    test_market = test_market,
+    regimes = regimes,
+    train_indices = train_indices,
+    test_indices = test_indices,
+    regime_counts = table(regimes)
+  ))
+}
+
+# Standard split train-test chronologically
+split_train_test <- function(returns_matrix, dates, market_returns = NULL, train_ratio = 0.7) {
+  n <- nrow(returns_matrix)
+  
+  # Calculate split index
+  train_size <- floor(train_ratio * n)
+  
+  # Split returns and dates
+  train_returns <- returns_matrix[1:train_size, , drop = FALSE]
+  test_returns <- returns_matrix[(train_size+1):n, , drop = FALSE]
+  
+  train_dates <- dates[1:train_size]
+  test_dates <- dates[(train_size+1):n]
+  
+  # Split market returns if provided
+  if(!is.null(market_returns)) {
+    train_market <- market_returns[1:train_size]
+    test_market <- market_returns[(train_size+1):n]
+  } else {
+    train_market <- test_market <- NULL
+  }
+  
+  return(list(
+    train_returns = train_returns,
+    test_returns = test_returns,
+    train_dates = train_dates,
+    test_dates = test_dates,
+    train_market = train_market,
+    test_market = test_market
+  ))
+}
+
+# Calculate portfolio returns
+calculate_portfolio_returns <- function(weights, returns, clean_mask = NULL) {
+  if (is.null(clean_mask)) {
+    return(returns %*% weights)
+  } else {
+    # Handle missing values using the mask
+    clean_mask[clean_mask == 0] <- NA
+    
+    # Calculate portfolio returns with NA handling for each time period
+    port_returns <- numeric(nrow(returns))
+    for (i in 1:nrow(returns)) {
+      valid_indices <- !is.na(clean_mask[i, ])
+      if (sum(valid_indices) > 0) {
+        # Normalize weights for valid assets
+        norm_weights <- weights[valid_indices] / sum(weights[valid_indices])
+        port_returns[i] <- sum(norm_weights * returns[i, valid_indices])
+      } else {
+        port_returns[i] <- NA
+      }
+    }
+    return(port_returns)
+  }
+}
+
+# Calculate comprehensive risk measures
+calculate_risk_measures <- function(returns) {
+  returns <- returns[!is.na(returns)]
+  
+  if (length(returns) < 10) {
+    return(list(
+      mean = NA, volatility = NA, sharpe = NA, 
+      var_95 = NA, es_95 = NA, cvar_95 = NA, 
+      max_drawdown = NA, omega_ratio = NA,
+      sortino_ratio = NA, calmar_ratio = NA
+    ))
+  }
+  
+  # Basic measures
+  mean_ret <- mean(returns)
+  vol <- sd(returns)
+  sharpe <- mean_ret / vol
+  
+  # Downside risk measures
+  var_95 <- quantile(returns, 0.05)
+  es_95 <- mean(returns[returns <= var_95])
+  cvar_95 <- es_95  # CVaR is the same as Expected Shortfall
+  
+  # Maximum Drawdown
+  cum_returns <- cumprod(1 + returns)
+  peak_values <- cummax(cum_returns)
+  drawdowns <- (cum_returns - peak_values) / peak_values
+  max_drawdown <- min(drawdowns)
+  
+  # Omega Ratio (ratio of gains to losses relative to threshold)
+  threshold <- 0
+  omega_ratio <- sum(pmax(returns - threshold, 0)) / sum(pmax(threshold - returns, 0))
+  
+  # Sortino Ratio (adjusts Sharpe ratio by using downside deviation)
+  downside_returns <- returns[returns < 0]
+  downside_deviation <- if(length(downside_returns) > 0) sd(downside_returns) else 0
+  sortino_ratio <- if(downside_deviation > 0) mean_ret / downside_deviation else Inf
+  
+  # Calmar Ratio (return to maximum drawdown)
+  calmar_ratio <- if(max_drawdown != 0) mean_ret / abs(max_drawdown) else Inf
+  
+  list(
+    mean = mean_ret,
+    volatility = vol,
+    sharpe = sharpe,
+    var_95 = var_95,
+    es_95 = es_95,
+    cvar_95 = cvar_95,
+    max_drawdown = max_drawdown,
+    omega_ratio = omega_ratio,
+    sortino_ratio = sortino_ratio,
+    calmar_ratio = calmar_ratio
+  )
+}

@@ -34,13 +34,15 @@ robust-portfolio-optimization/
 │   ├── simulation.R       # Simulation study in a single file
 │   ├── empirical.R        # S&P 500 and empirical analysis
 │   ├── stress_testing.R   # Stress testing framework
+│   ├── computational_efficiency.R # Computational performance benchmarking
 │   └── validation.R       # Statistical validation methods
 ├── visualization/         
 │   └── visualization.R    # All visualization functions in one file
 ├── examples/              
 │   ├── run_simulation.R   # Run simulation examples
 │   ├── run_empirical.R    # Run empirical analysis examples
-│   └── run_stress_test.R  # Run stress test examples
+│   ├── run_stress_test.R  # Run stress test examples
+│   └── run_benchmark.R    # Run computational efficiency benchmarks
 └── README.md             
 ```
 
@@ -57,6 +59,7 @@ robust-portfolio-optimization/
 - **Simulation Study**: Evaluates performance under controlled contamination with various distribution types
 - **Empirical Analysis**: Tests methods on S&P 500 data across multiple market regimes (2015-2025)
 - **Stress Testing**: Assesses resilience under systematically generated stress scenarios
+- **Computational Efficiency**: Benchmarks computation time across methods and portfolio dimensions
 - **Statistical Validation**: Provides rigorous statistical assessment of performance differences
 
 ### 3. Performance Metrics
@@ -78,7 +81,7 @@ required_packages <- c(
   "mvtnorm", "robustbase", "rrcov", "pcaPP", "DEoptim", "glasso", "corpcor",
   "GA", "Matrix", "parallel", "doParallel", "foreach", "ggplot2", "reshape2",
   "dplyr", "plotly", "tidyquant", "quantmod", "xts", "PerformanceAnalytics", 
-  "tidyr", "quadprog", "tseries", "boot", "moments", "nortest"
+  "tidyr", "quadprog", "tseries", "boot", "moments", "nortest", "microbenchmark"
 )
 
 # Install required packages
@@ -126,6 +129,20 @@ source("examples/run_stress_test.R")
 
 This executes the multi-scenario stress testing framework to evaluate method resilience.
 
+#### Computational Benchmarking
+
+To run the computational efficiency analysis:
+
+```r
+source("examples/run_benchmark.R")
+```
+
+This benchmarks all estimation methods across varying portfolio dimensions and dataset sizes, measuring:
+- Covariance estimation time
+- Portfolio optimization time
+- Scaling efficiency with dataset size
+- Memory usage
+
 ## Key Results
 
 The repository implements the methods that achieved the following results in our research:
@@ -162,26 +179,24 @@ risk_measures <- calculate_risk_measures(calculate_portfolio_returns(weights, re
 print(risk_measures)
 ```
 
-### Advanced Usage: Stress Testing
+### Advanced Usage: Computational Efficiency Benchmarking
 
 ```r
 # Load modules
 source("src/estimation.R")
-source("src/portfolio.R")
-source("analysis/stress_testing.R")
+source("analysis/computational_efficiency.R")
 
-# Load or generate data
-returns <- read.csv("your_returns_data.csv")
-
-# Apply stress testing
-stress_results <- run_stress_test_analysis(
-  returns, 
-  stress_method = "tail_contamination", 
-  stress_intensity = 0.3
+# Run comprehensive benchmark
+benchmark_results <- benchmark_estimation_methods(
+  methods = c("Sample", "MCD", "Tyler", "PFSE", "SSRE"),
+  dimensions = c(50, 100, 200, 500),
+  observations = c(250, 500, 1000),
+  replications = 10
 )
 
-# Compare method performance
-print(stress_results$performance_summary)
+# Visualize benchmark results
+plot_computation_time(benchmark_results)
+plot_scalability(benchmark_results)
 ```
 
 ## Contributing

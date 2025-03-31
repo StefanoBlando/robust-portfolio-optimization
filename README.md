@@ -205,7 +205,7 @@ We welcome contributions to this project. Please feel free to submit a pull requ
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the AGPL License - see the LICENSE file for details.
 
 ## Acknowledgments
 
